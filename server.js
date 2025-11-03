@@ -55,18 +55,18 @@ console.log("-> [DEBUG] İstek başarılı (HTTP 200).");
 return response.data.data;
 } catch (error) {
 if (error.response) {
-console.error(`-> [DEBUG] HTTP Hata Kodu: ${error.response.status}`);
-const errorData = error.response.data;
-if (typeof errorData === 'string' && errorData.startsWith('')) {
-throw new Error("HTTP 4xx/5xx - Güvenlik Duvarı Engeli (Cloudflare): API Uç Noktası doğru değil.");
+const { status, data } = error.response;
+console.error(`-> [DEBUG] HTTP Hata Kodu: ${status}`);
+if (typeof data === 'string' && data.toLowerCase().includes('cloudflare')) {
+throw new Error(`HTTP ${status} - Güvenlik Duvarı Engeli (Cloudflare): API isteği engellendi. Yanıt: ${data.substring(0, 200)}...`);
 }
-if (errorData && errorData.errors) {
-const errorMessages = errorData.errors.map(err =>
+if (data && data.errors) {
+const errorMessages = data.errors.map(err =>
 `${err.message} (Path: ${err.path ? err.path.join('.') : 'N/A'})`
 ).join('\n');
-throw new Error(`HTTP ${error.response.status} - Detaylı GraphQL Hataları:\n${errorMessages}`);
+throw new Error(`HTTP ${status} - Detaylı GraphQL Hataları:\n${errorMessages}`);
 }
-throw new Error(`İstek Başarısız Oldu (HTTP ${error.response.status}): ${JSON.stringify(errorData)}`);
+throw new Error(`İstek Başarısız Oldu (HTTP ${status}): ${JSON.stringify(data)}`);
 } else {
 throw error;
 }
@@ -78,7 +78,6 @@ throw error;
 * iKAS API'ye resmi basit REST POST ile yükler ve dönen ID'yi alır.
 */
 async function uploadImageWithRest(filePath) {
-// Uç nokta hala en doğru tahmin: https://api.myikas.com/api/v1/admin/files
 console.log(`\n🖼️ REST Üzerinden Resim Yükleniyor (Uç Nokta: ${IKAS_UPLOAD_URL}): ${basename(filePath)}...`);
 
 if (!fs.existsSync(filePath)) {
@@ -88,36 +87,26 @@ throw new Error(`Dosya bulunamadı: ${filePath}`);
 const form = new FormData();
 const fileName = basename(filePath);
 const contentType = mime.lookup(filePath) || 'application/octet-stream';
-// 'file' anahtarı iKAS API için kritik ve doğru.
 form.append('file', fs.createReadStream(filePath), { filename: fileName, contentType: contentType });
 
 try {
-// Axios config objesi
 const config = {
 method: 'POST',
 url: IKAS_UPLOAD_URL,
-// 🔥 KRİTİK BAŞLIKLAR:
 headers: {
-// 1. form-data headers'ını mutlaka dahil et
 ...form.getHeaders(),
-// 2. Yetkilendirme başlığı
 'Authorization': `Bearer ${IKAS_TOKEN}`,
-// 3. Bot algılamayı atlatma
 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
-// 4. JSON yanıtı beklentisi
-'Accept': 'application/json'
-// 5. Cloudflare'ı atlatmak için ek bir başlık: Eğer iKAS,
-// tarayıcı isteği gibi görünmesi için 'Referer' istiyorsa.
-// 'Referer': 'https://panel.myikas.com/'
+'Accept': 'application/json',
+'Referer': 'https://panel.myikas.com/'
 },
-data: form, // FormData objesini doğrudan 'data' olarak ata
+data: form,
 maxBodyLength: Infinity,
 maxContentLength: Infinity,
 };
 
 const response = await axios(config);
 
-// ... (Yanıt işleme kısmı önceki kodla aynı kalır)
 let fileId = null;
 if (Array.isArray(response.data) && response.data.length > 0) {
 fileId = response.data[0].id || response.data[0].fileId;
@@ -134,17 +123,19 @@ return fileId;
 
 } catch (error) {
 console.error(`❌ Resim yüklenirken kritik hata oluştu.`);
-if (error.response && error.response.data) {
-if (typeof error.response.data === 'string' && error.response.data.startsWith('')) {
-console.error(`-> Güvenlik Engeli/API Uç Noktası Hatası: Cloudflare veya Yanlış URL/Format.`);
-// Bu noktada, bu sorunun sadece iKAS teknik destek ile çözülebileceğini kabul etmeliyiz.
+if (error.response) {
+const { status, data } = error.response;
+console.error(`-> HTTP Hata Kodu: ${status}`);
+if (typeof data === 'string' && data.toLowerCase().includes('cloudflare')) {
+console.error(`-> Güvenlik Engeli (Cloudflare): API isteği muhtemelen bir güvenlik duvarı tarafından engellendi.`);
+console.error(`-> Yanıt Başlangıcı: ${data.substring(0, 200)}...`);
 } else {
-console.error(`-> Detay (JSON): ${JSON.stringify(error.response.data)}`);
+console.error(`-> Sunucu Yanıtı: ${JSON.stringify(data)}`);
 }
 } else {
-console.error(`-> Mesaj: ${error.message}`);
+console.error(`-> Teknik Hata Mesajı: ${error.message}`);
 }
-throw new Error("Resim yükleme işlemi başarısız.");
+throw new Error("Resim yükleme işlemi başarısız oldu.");
 }
 }
 
